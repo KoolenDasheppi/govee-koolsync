@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+main_personal.py
+.DS_Store
+.claude/
+memory/
