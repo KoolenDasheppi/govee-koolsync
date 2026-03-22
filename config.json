@@ -14,43 +14,74 @@
     "HUE_BOUNDARIES": {
       "mids": [0.15, 0.35],
       "highs": [0.50, 0.70]
+    },
+    "PALETTES": {
+      "lows": [[255, 0, 0], [255, 80, 0], [128, 0, 128], [255, 0, 255]],
+      "mids": [[0, 255, 0], [150, 255, 0], [255, 255, 0]],
+      "highs": [[0, 255, 255], [0, 0, 255], [255, 255, 255], [100, 150, 255]]
     }
   },
   "presets": {
     "dubstep": {
       "description": "Golden settings for heavy EDM/Dubstep transients.",
-      "SENSITIVITY_MULTIPLIERS": {"lows": 1.8, "mids": 2.2, "highs": 2.5},
-      "COOLDOWNS": {"lows": 0.10, "mids": 0.08, "highs": 0.08},
-      "ABS_NOISE_FLOOR": 0.02
+      "PALETTES": {
+        "lows": [[255, 0, 0], [255, 80, 0], [128, 0, 128], [255, 0, 255]],
+        "mids": [[0, 255, 0], [150, 255, 0], [255, 255, 0]],
+        "highs": [[0, 255, 255], [0, 0, 255], [255, 255, 255], [100, 150, 255]]
+      }
     },
     "metal": {
       "description": "Optimized for fast guitar picking and double-kick drums.",
       "SENSITIVITY_MULTIPLIERS": {"lows": 2.0, "mids": 1.5, "highs": 2.0},
       "COOLDOWNS": {"lows": 0.08, "mids": 0.05, "highs": 0.05},
-      "HUE_BOUNDARIES": {"mids": [0.0, 0.15], "highs": [0.70, 0.90]}
+      "PALETTES": {
+        "lows": [[200, 0, 0], [139, 0, 0], [255, 30, 0]],
+        "mids": [[255, 140, 0], [255, 200, 0], [255, 255, 200]],
+        "highs": [[200, 200, 255], [255, 255, 255]]
+      }
     },
     "heavy_guitar": {
       "description": "Sensitive mids for high-gain guitar riffs.",
       "SENSITIVITY_MULTIPLIERS": {"lows": 2.0, "mids": 1.5, "highs": 2.0},
-      "COOLDOWNS": {"lows": 0.10, "mids": 0.05, "highs": 0.05}
+      "COOLDOWNS": {"lows": 0.10, "mids": 0.05, "highs": 0.05},
+      "PALETTES": {
+        "lows": [[200, 0, 0], [139, 0, 0], [255, 30, 0]],
+        "mids": [[255, 140, 0], [255, 200, 0], [255, 255, 200]],
+        "highs": [[200, 200, 255], [255, 255, 255]]
+      }
     },
     "clean_guitar": {
       "description": "Low noise floor for quiet, clean auxiliary signals.",
       "ABS_NOISE_FLOOR": 0.005,
       "SENSITIVITY_MULTIPLIERS": {"lows": 2.2, "mids": 1.4, "highs": 1.8},
-      "COOLDOWNS": {"lows": 0.12, "mids": 0.06, "highs": 0.06}
+      "COOLDOWNS": {"lows": 0.12, "mids": 0.06, "highs": 0.06},
+      "PALETTES": {
+        "lows": [[0, 0, 139], [72, 61, 139], [0, 0, 205]],
+        "mids": [[32, 178, 170], [0, 250, 154], [175, 238, 238]],
+        "highs": [[255, 218, 185], [255, 223, 0], [253, 245, 230]]
+      }
     },
     "hip_hop": {
       "description": "Slow, smooth pulses for sustained 808 bass notes.",
       "SENSITIVITY_MULTIPLIERS": {"lows": 1.5, "mids": 2.0, "highs": 2.2},
       "COOLDOWNS": {"lows": 0.20, "mids": 0.10, "highs": 0.10},
-      "ABS_NOISE_FLOOR": 0.015
+      "ABS_NOISE_FLOOR": 0.015,
+      "PALETTES": {
+        "lows": [[75, 0, 130], [138, 43, 226], [0, 0, 128]],
+        "mids": [[255, 20, 147], [255, 0, 255], [218, 112, 214]],
+        "highs": [[152, 251, 152], [0, 255, 255], [255, 255, 255]]
+      }
     },
     "pop": {
       "description": "Balanced settings for consistent 4/4 radio rhythms.",
       "SENSITIVITY_MULTIPLIERS": {"lows": 1.7, "mids": 1.8, "highs": 2.0},
       "COOLDOWNS": {"lows": 0.12, "mids": 0.10, "highs": 0.10},
-      "ABS_NOISE_FLOOR": 0.02
+      "ABS_NOISE_FLOOR": 0.02,
+      "PALETTES": {
+        "lows": [[255, 127, 80], [0, 206, 209], [255, 105, 180]],
+        "mids": [[255, 255, 0], [127, 255, 0]],
+        "highs": [[30, 144, 255], [240, 255, 255]]
+      }
     }
   }
 }

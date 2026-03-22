@@ -13,7 +13,6 @@ from bleak import BleakClient
 from collections import deque
 
 # --- CONFIGURATION (STRICT ROUTING) ---
-# Note: These are physical mappings. Do NOT let JSON overwrite these variables.
 MAC_LOWS  = "PLACEHOLDER_MAC_1"
 MAC_MIDS  = "PLACEHOLDER_MAC_2"
 MAC_HIGHS = "PLACEHOLDER_MAC_3"
@@ -26,9 +25,6 @@ AUDIO_DEVICE_NAME = "BlackHole 2ch"
 CHUNK_SIZE = 256
 SAMPLE_RATE = 44100
 
-# Palettes
-PALETTE_LOWS = [(255, 0, 0), (255, 80, 0), (128, 0, 128), (255, 0, 255)]
-
 # --- SMART PRESET SYSTEM ---
 def deep_update(base_dict, update_dict):
     """Recursively update a dictionary."""
@@ -38,7 +34,6 @@ def deep_update(base_dict, update_dict):
         else:
             base_dict[key] = value
 
-# Load config early
 with open("config.json", "r") as f:
     config_data = json.load(f)
 
@@ -54,21 +49,18 @@ parser = argparse.ArgumentParser(
 parser.add_argument("--preset", type=str, default="dubstep", help=preset_help)
 args = parser.parse_args()
 
-# Start with a deep copy of defaults
 settings = copy.deepcopy(config_data["defaults"])
-
-# Apply deep merge if preset exists
 if args.preset in config_data["presets"]:
     print(f"Applying Preset: {args.preset} - {config_data['presets'][args.preset].get('description', '')}")
     deep_update(settings, config_data["presets"][args.preset])
 else:
     print(f"Preset '{args.preset}' not found. Using defaults.")
 
-# Extract Active Variables
 SENSITIVITY_MULTIPLIERS = settings["SENSITIVITY_MULTIPLIERS"]
 COOLDOWNS = settings["COOLDOWNS"]
 ABS_NOISE_FLOOR = settings["ABS_NOISE_FLOOR"]
 HUE_BOUNDARIES = settings["HUE_BOUNDARIES"]
+PALETTES = settings["PALETTES"]
 
 # --- STATE MACHINE ---
 class VisualizerState:
@@ -95,16 +87,12 @@ pitch_detectors = {}
 
 # --- MATH HELPERS ---
 def get_color_from_pitch(freq, min_hz, max_hz, min_hue, max_hue):
-    """Normalize frequency and map to bounded HSV hue."""
     if freq <= 0:
         mid_hue = (min_hue + max_hue) / 2
         rgb = colorsys.hsv_to_rgb(mid_hue, 1.0, 1.0)
         return tuple(int(c * 255) for c in rgb)
-
-    # Logarithmic scaling for pitch perception
     norm = (np.log10(freq) - np.log10(min_hz)) / (np.log10(max_hz) - np.log10(min_hz))
     norm = np.clip(norm, 0.0, 1.0)
-
     hue = min_hue + (norm * (max_hue - min_hue))
     value = 0.7 + (norm * 0.3)
     rgb = colorsys.hsv_to_rgb(hue, 1.0, value)
@@ -163,7 +151,6 @@ def audio_callback(in_data, frame_count, time_info, status):
     global state, onset_detectors, pitch_detectors
     raw_audio = np.frombuffer(in_data, dtype=np.float32)
 
-    # Apply Filters
     low_data, state.zi_low = signal.sosfilt(state.sos_low, raw_audio, zi=state.zi_low)
     mid_data, state.zi_mid = signal.sosfilt(state.sos_mid, raw_audio, zi=state.zi_mid)
     high_data, state.zi_high = signal.sosfilt(state.sos_high, raw_audio, zi=state.zi_high)
@@ -171,30 +158,23 @@ def audio_callback(in_data, frame_count, time_info, status):
 
     now = time.time()
     for name, data in bands.items():
-        # STRICT ROUTING: Physical mapping of frequency to MAC
         mac = MAC_LOWS if name == "lows" else (MAC_MIDS if name == "mids" else MAC_HIGHS)
-
         current_rms = np.sqrt(np.mean(data**2))
         if current_rms < ABS_NOISE_FLOOR: continue
-
         detector_result = bool(onset_detectors[name](data))
         current_onset = onset_detectors[name].get_last() if detector_result else 0.0
-
         state.rms_history[name].append(current_rms)
         state.onset_history[name].append(current_onset)
-
         if not detector_result: continue
-
-        # Adaptive Threshold Math
         local_rms_avg = np.mean(state.rms_history[name])
         local_onset_avg = np.mean(state.onset_history[name])
         multiplier = SENSITIVITY_MULTIPLIERS[name]
 
         if (current_rms > local_rms_avg * multiplier or current_onset > local_onset_avg * multiplier):
             if now - state.last_beat_times[mac] > COOLDOWNS[name]:
-                # UNIVERSAL LOWS TRICK: No pitch for bass
                 if name == "lows":
-                    state.target_colors[mac] = random.choice(PALETTE_LOWS)
+                    # Externalized palette for Lows
+                    state.target_colors[mac] = tuple(random.choice(PALETTES["lows"]))
                 elif name == "mids":
                     freq = pitch_detectors[name](data)[0]
                     min_h, max_h = HUE_BOUNDARIES["mids"]
@@ -203,7 +183,6 @@ def audio_callback(in_data, frame_count, time_info, status):
                     freq = pitch_detectors[name](data)[0]
                     min_h, max_h = HUE_BOUNDARIES["highs"]
                     state.target_colors[mac] = get_color_from_pitch(freq, 1500, 5000, min_h, max_h)
-
                 state.last_beat_times[mac] = now
     return (None, pyaudio.paContinue)
 
@@ -211,7 +190,6 @@ def audio_callback(in_data, frame_count, time_info, status):
 async def ble_consumer_loop():
     print(f"🚀 Launching strictly routed visualizer with preset: {args.preset}")
     while state.running:
-        # STRICT HARDWARE ROUTING: One by one send to mapped clients
         for mac in [MAC_LOWS, MAC_MIDS, MAC_HIGHS]:
             if state.target_colors[mac] != state.last_sent_colors[mac]:
                 client = state.clients.get(mac)
@@ -219,12 +197,11 @@ async def ble_consumer_loop():
                     try:
                         color = state.target_colors[mac]
                         payload = build_color_payload(*color)
-                        # Write Without Response (Zero Latency)
                         await client.write_gatt_char(CHAR_UUID, payload, response=False)
                         state.last_sent_colors[mac] = color
                         await asyncio.sleep(0.04) # Anti-crash stagger
                     except Exception: pass
-        await asyncio.sleep(0.02) # 50fps Target
+        await asyncio.sleep(0.02)
 
 async def run_visualizer():
     global onset_detectors, pitch_detectors
@@ -234,22 +211,18 @@ async def run_visualizer():
         if name != "lows":
             pitch_det = aubio.pitch("yinfft", 1024, CHUNK_SIZE, SAMPLE_RATE)
             pitch_det.set_unit("Hz"); pitch_detectors[name] = pitch_det
-
     p = pyaudio.PyAudio()
     device_index = None
     for i in range(p.get_device_count()):
         dev = p.get_device_info_by_index(i)
         if AUDIO_DEVICE_NAME in dev['name']: device_index = i; break
     if device_index is None: return
-
     await asyncio.gather(*(connect_and_manage(mac) for mac in DEVICE_MACS))
     if len(state.clients) == 0: return
-
     stream = p.open(format=pyaudio.paFloat32, channels=1, rate=SAMPLE_RATE, input=True,
                     input_device_index=device_index, frames_per_buffer=CHUNK_SIZE,
                     stream_callback=audio_callback)
     stream.start_stream()
-
     try: await ble_consumer_loop()
     except asyncio.CancelledError: pass
     finally:
