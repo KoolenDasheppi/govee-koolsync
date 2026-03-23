@@ -8,9 +8,11 @@ import colorsys
 import json
 import argparse
 import copy
+import os
 from scipy import signal
 from bleak import BleakClient
 from collections import deque
+from aiohttp import web
 
 # --- CONFIGURATION (STRICT ROUTING) ---
 MAC_LOWS  = "PLACEHOLDER_MAC_1"
@@ -56,11 +58,20 @@ if args.preset in config_data["presets"]:
 else:
     print(f"Preset '{args.preset}' not found. Using defaults.")
 
-SENSITIVITY_MULTIPLIERS = settings["SENSITIVITY_MULTIPLIERS"]
-COOLDOWNS = settings["COOLDOWNS"]
-ABS_NOISE_FLOOR = settings["ABS_NOISE_FLOOR"]
-HUE_BOUNDARIES = settings["HUE_BOUNDARIES"]
-PALETTES = settings["PALETTES"]
+# Active parameters (can be updated via web dashboard)
+active_params = {
+    "SENSITIVITY_MULTIPLIERS": settings["SENSITIVITY_MULTIPLIERS"],
+    "COOLDOWNS": settings["COOLDOWNS"],
+    "ABS_NOISE_FLOOR": settings["ABS_NOISE_FLOOR"],
+    "HUE_BOUNDARIES": settings["HUE_BOUNDARIES"],
+    "PALETTES": settings["PALETTES"]
+}
+
+SENSITIVITY_MULTIPLIERS = active_params["SENSITIVITY_MULTIPLIERS"]
+COOLDOWNS = active_params["COOLDOWNS"]
+ABS_NOISE_FLOOR = active_params["ABS_NOISE_FLOOR"]
+HUE_BOUNDARIES = active_params["HUE_BOUNDARIES"]
+PALETTES = active_params["PALETTES"]
 
 # --- STATE MACHINE ---
 class VisualizerState:
@@ -84,6 +95,198 @@ class VisualizerState:
 state = VisualizerState()
 onset_detectors = {}
 pitch_detectors = {}
+
+# --- WEB DASHBOARD ---
+HTML_CONTENT = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KoolSync Live Tweaker</title>
+    <style>
+        :root {
+            --bg: #121212;
+            --surface: #1e1e1e;
+            --primary: #bd93f9;
+            --accent: #50fa7b;
+            --text: #f8f8f2;
+            --muted: #6272a4;
+        }
+        body { background-color: var(--bg); color: var(--text); font-family: -apple-system, sans-serif; margin: 0; padding: 20px; display: flex; justify-content: center; }
+        .container { max-width: 800px; width: 100%; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .card { background: var(--surface); padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        h2 { color: var(--primary); margin-top: 0; border-bottom: 2px solid var(--muted); padding-bottom: 10px; }
+        .control-group { margin-bottom: 15px; }
+        label { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 0.9em; color: var(--muted); }
+        input[type="range"] { width: 100%; accent-color: var(--primary); cursor: pointer; }
+        .header { grid-column: 1 / -1; text-align: center; margin-bottom: 20px; }
+        .btn { background: var(--primary); color: #000; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 10px; width: 100%; transition: transform 0.1s; }
+        .btn:hover { transform: scale(1.02); background: #a779e6; }
+        .btn:active { transform: scale(0.98); }
+        .status { margin-top: 10px; text-align: center; font-size: 0.8em; min-height: 1.2em; color: var(--accent); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header card">
+            <h1>🎛️ KoolSync Live Tweaker</h1>
+            <p style="color:var(--muted)">Real-time adjustments for your lights</p>
+            <div id="status" class="status">System Online</div>
+            <button class="btn" onclick="saveSettings()">💾 Save to Config</button>
+        </div>
+
+        <div class="card">
+            <h2>🔊 Sensitivity Multipliers</h2>
+            <div class="control-group">
+                <label>Lows (Sub-Bass) <span id="l_mul_val">1.8</span></label>
+                <input type="range" id="l_mul" min="1.0" max="5.0" step="0.1" value="1.8">
+            </div>
+            <div class="control-group">
+                <label>Mids (Guitar/Synth) <span id="m_mul_val">2.2</span></label>
+                <input type="range" id="m_mul" min="1.0" max="5.0" step="0.1" value="2.2">
+            </div>
+            <div class="control-group">
+                <label>Highs (Hi-Hats) <span id="h_mul_val">2.5</span></label>
+                <input type="range" id="h_mul" min="1.0" max="5.0" step="0.1" value="2.5">
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>⏱️ Cooldowns (s)</h2>
+            <div class="control-group">
+                <label>Lows <span id="l_cool_val">0.10</span></label>
+                <input type="range" id="l_cool" min="0.01" max="0.30" step="0.01" value="0.10">
+            </div>
+            <div class="control-group">
+                <label>Mids <span id="m_cool_val">0.08</span></label>
+                <input type="range" id="m_cool" min="0.01" max="0.30" step="0.01" value="0.08">
+            </div>
+            <div class="control-group">
+                <label>Highs <span id="h_cool_val">0.08</span></label>
+                <input type="range" id="h_cool" min="0.01" max="0.30" step="0.01" value="0.08">
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>🔇 Noise Floor</h2>
+            <div class="control-group">
+                <label>Abs Threshold <span id="abs_val">0.020</span></label>
+                <input type="range" id="abs" min="0.001" max="0.100" step="0.001" value="0.020">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const ids = {
+            l_mul: 'SENSITIVITY_MULTIPLIERS', m_mul: 'SENSITIVITY_MULTIPLIERS', h_mul: 'SENSITIVITY_MULTIPLIERS',
+            l_cool: 'COOLDOWNS', m_cool: 'COOLDOWNS', h_cool: 'COOLDOWNS',
+            abs: 'ABS_NOISE_FLOOR'
+        };
+        const maps = {
+            l_mul: ['lows', 0], m_mul: ['mids', 0], h_mul: ['highs', 0],
+            l_cool: ['lows', 0], m_cool: ['mids', 0], h_cool: ['highs', 0]
+        };
+
+        async function loadSettings() {
+            try {
+                const res = await fetch('/api/config');
+                const data = await res.json();
+
+                document.getElementById('l_mul').value = data.SENSITIVITY_MULTIPLIERS.lows;
+                document.getElementById('l_mul_val').innerText = data.SENSITIVITY_MULTIPLIERS.lows;
+                document.getElementById('m_mul').value = data.SENSITIVITY_MULTIPLIERS.mids;
+                document.getElementById('m_mul_val').innerText = data.SENSITIVITY_MULTIPLIERS.mids;
+                document.getElementById('h_mul').value = data.SENSITIVITY_MULTIPLIERS.highs;
+                document.getElementById('h_mul_val').innerText = data.SENSITIVITY_MULTIPLIERS.highs;
+
+                document.getElementById('l_cool').value = data.COOLDOWNS.lows;
+                document.getElementById('l_cool_val').innerText = data.COOLDOWNS.lows;
+                document.getElementById('m_cool').value = data.COOLDOWNS.mids;
+                document.getElementById('m_cool_val').innerText = data.COOLDOWNS.mids;
+                document.getElementById('h_cool').value = data.COOLDOWNS.highs;
+                document.getElementById('h_cool_val').innerText = data.COOLDOWNS.highs;
+
+                document.getElementById('abs').value = data.ABS_NOISE_FLOOR;
+                document.getElementById('abs_val').innerText = data.ABS_NOISE_FLOOR;
+            } catch (e) { console.error(e); }
+        }
+
+        async function updateSetting(key, id, type, sub_key) {
+            const el = document.getElementById(id);
+            const val = parseFloat(el.value);
+            document.getElementById(id + '_val').innerText = val.toFixed(type === 'floor' ? 3 : 1);
+
+            const body = {};
+            if (sub_key) body[ids[id]] = { [sub_key]: val };
+            else body[ids[id]] = val;
+
+            await fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+        }
+
+        ['l_mul', 'm_mul', 'h_mul', 'l_cool', 'm_cool', 'h_cool', 'abs'].forEach(id => {
+            const el = document.getElementById(id);
+            const sub_key = maps[id] ? maps[id][0] : null;
+            const type = id === 'abs' ? 'floor' : 'mult';
+            el.addEventListener('input', () => updateSetting(ids[id], id, type, sub_key));
+        });
+
+        async function saveSettings() {
+            const btn = document.querySelector('.btn');
+            const status = document.getElementById('status');
+            btn.disabled = true;
+            status.innerText = "Saving...";
+            try {
+                await fetch('/api/save', { method: 'POST' });
+                status.innerText = "✅ Saved to config.json!";
+            } catch (e) { status.innerText = "❌ Error saving"; }
+            setTimeout(() => { btn.disabled = false; }, 1000);
+        }
+
+        loadSettings();
+    </script>
+</body>
+</html>
+"""
+
+async def get_config(request):
+    return web.json_response(active_params)
+
+async def update_config(request):
+    global SENSITIVITY_MULTIPLIERS, COOLDOWNS, ABS_NOISE_FLOOR
+    data = await request.json()
+
+    if "SENSITIVITY_MULTIPLIERS" in data:
+        SENSITIVITY_MULTIPLIERS = data["SENSITIVITY_MULTIPLIERS"]
+    if "COOLDOWNS" in data:
+        COOLDOWNS = data["COOLDOWNS"]
+    if "ABS_NOISE_FLOOR" in data:
+        ABS_NOISE_FLOOR = data["ABS_NOISE_FLOOR"]
+
+    return web.json_response({"status": "ok"})
+
+async def save_config(request):
+    deep_update(config_data["defaults"], active_params)
+    with open("config.json", "w") as f:
+        json.dump(config_data, f, indent=2)
+    return web.json_response({"status": "saved"})
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', lambda r: web.Response(text=HTML_CONTENT, content_type='text/html'))
+    app.router.add_get('/api/config', get_config)
+    app.router.add_post('/api/config', update_config)
+    app.router.add_post('/api/save', save_config)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    await site.start()
+    print("🌐 Web Dashboard running at http://localhost:8080")
 
 # --- MATH HELPERS ---
 def get_color_from_pitch(freq, min_hz, max_hz, min_hue, max_hue):
@@ -217,6 +420,10 @@ async def run_visualizer():
         dev = p.get_device_info_by_index(i)
         if AUDIO_DEVICE_NAME in dev['name']: device_index = i; break
     if device_index is None: return
+
+    # Start Web Dashboard
+    await start_web_server()
+
     await asyncio.gather(*(connect_and_manage(mac) for mac in DEVICE_MACS))
     if len(state.clients) == 0: return
     stream = p.open(format=pyaudio.paFloat32, channels=1, rate=SAMPLE_RATE, input=True,

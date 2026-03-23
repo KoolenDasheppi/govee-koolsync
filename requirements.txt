@@ -1,0 +1,7 @@
+bleak
+aubio
+scipy
+pyaudio
+numpy
+colorsys
+aiohttp
